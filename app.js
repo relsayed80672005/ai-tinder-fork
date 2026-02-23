@@ -50,7 +50,8 @@ function imgFor(seed) {
   return `https://images.unsplash.com/photo-${seed}?auto=format&fit=crop&w=1200&q=80`;
 }
 
-// ✅ FIX 1: sample-without-replacement so these are actually distinct photos
+// create 4 photos per profile so "double tap" truly cycles photos
+// (sample-without-replacement so these are actually distinct)
 function makePhotoSet() {
   const pool = [...UNSPLASH_SEEDS];
   for (let i = pool.length - 1; i > 0; i--) {
@@ -205,11 +206,11 @@ let startX = 0;
 let startY = 0;
 let mouseDown = false;
 
-// ✅ FIX 2: isolate touch and click paths (no shared double-tap state)
+// isolate touch and click paths (no shared double-tap state)
 let touchLastTapTime = 0;
 let clickLastTapTime = 0;
 
-// ✅ FIX 2 & 3: suppress synthetic/stray clicks after touch or swipe
+// suppress synthetic/stray clicks after touch or swipe
 let recentTouch = false;
 let suppressNextClick = false;
 
@@ -266,8 +267,12 @@ deckEl.addEventListener("touchend", (e) => {
   // Swipe
   const didSwipe = processSwipe(dx, dy);
 
-  // ✅ prevent the synthetic click after touch from doing anything
+  // prevent the synthetic click after touch from doing anything
   if (didSwipe) {
+    // ✅ NEW: reset tap timers after swipes
+    touchLastTapTime = 0;
+    clickLastTapTime = 0;
+
     suppressNextClick = true;
     window.setTimeout(() => { suppressNextClick = false; }, 0);
   }
@@ -289,16 +294,19 @@ window.addEventListener("mouseup", (e) => {
 
   const didSwipe = processSwipe(dx, dy);
 
-  // ✅ FIX 3: consume the click that happens after a drag swipe
+  // consume the click that happens after a drag swipe
   if (didSwipe) {
+    touchLastTapTime = 0;
+    clickLastTapTime = 0;
+
     suppressNextClick = true;
     window.setTimeout(() => { suppressNextClick = false; }, 0);
   }
 });
 
 // Double click / double tap (desktop clicks only)
-// ✅ click-based double click (more consistent than dblclick)
-// ✅ ignores touch-generated clicks and suppressed clicks
+// click-based double click (more consistent than dblclick)
+// ignores touch-generated clicks and suppressed clicks
 deckEl.addEventListener("click", (e) => {
   if (recentTouch) return;
   if (suppressNextClick) return;
