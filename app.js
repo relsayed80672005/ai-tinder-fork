@@ -45,14 +45,27 @@ const UNSPLASH_SEEDS = [
 ];
 
 function sample(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function pickTags() { return Array.from(new Set(Array.from({length:4}, ()=>sample(TAGS)))); }
+function pickTags() { return Array.from(new Set(Array.from({length:4}, () => sample(TAGS)))); }
 function imgFor(seed) {
   return `https://images.unsplash.com/photo-${seed}?auto=format&fit=crop&w=1200&q=80`;
+}
+
+// create 4 photos per profile so "double tap" truly cycles photos
+function makePhotoSet() {
+  const seeds = [
+    sample(UNSPLASH_SEEDS),
+    sample(UNSPLASH_SEEDS),
+    sample(UNSPLASH_SEEDS),
+    sample(UNSPLASH_SEEDS),
+  ];
+  // make sure they're not all identical
+  return seeds.map((s, i) => `${imgFor(s)}&sig=${i}`);
 }
 
 function generateProfiles(count = 12) {
   const profiles = [];
   for (let i = 0; i < count; i++) {
+    const photos = makePhotoSet();
     profiles.push({
       id: `p_${i}_${Date.now().toString(36)}`,
       name: sample(FIRST_NAMES),
@@ -61,7 +74,8 @@ function generateProfiles(count = 12) {
       title: sample(JOBS),
       bio: sample(BIOS),
       tags: pickTags(),
-      img: imgFor(sample(UNSPLASH_SEEDS)),
+      photos,          // array of photo urls
+      photoIndex: 0,   // which photo is currently shown
     });
   }
   return profiles;
@@ -78,17 +92,27 @@ const superLikeBtn = document.getElementById("superLikeBtn");
 
 let profiles = [];
 
+// Return the TOP card element (the last one appended)
+function getTopCardEl() {
+  return deckEl.lastElementChild;
+}
+
+// Return the TOP profile (the last profile in the array)
+function getTopProfile() {
+  return profiles.length ? profiles[profiles.length - 1] : null;
+}
+
 function renderDeck() {
   deckEl.setAttribute("aria-busy", "true");
   deckEl.innerHTML = "";
 
-  profiles.forEach((p, idx) => {
+  profiles.forEach((p) => {
     const card = document.createElement("article");
     card.className = "card";
 
     const img = document.createElement("img");
     img.className = "card__media";
-    img.src = p.img;
+    img.src = p.photos[p.photoIndex];
     img.alt = `${p.name} — profile photo`;
 
     const body = document.createElement("div");
@@ -132,17 +156,148 @@ function resetDeck() {
   renderDeck();
 }
 
-// Controls (intentionally not implemented)
-likeBtn.addEventListener("click", () => {
-  console.log("Like clicked.");
-});
-nopeBtn.addEventListener("click", () => {
-  console.log("Nope clicked.");
-});
-superLikeBtn.addEventListener("click", () => {
-  console.log("Super Like clicked.");
-});
+// -------------------
+// Actions (buttons + swipes call these)
+// -------------------
+function removeTopProfileAndRerender() {
+  if (!profiles.length) return;
+  profiles.pop();
+  renderDeck();
+}
+
+function handleLike() {
+  // Like = remove top card
+  removeTopProfileAndRerender();
+}
+
+function handleReject() {
+  // Reject = remove top card
+  removeTopProfileAndRerender();
+}
+
+function handleSuperLike() {
+  // Super like = remove top card
+  removeTopProfileAndRerender();
+}
+
+function handleNextPhoto() {
+  const p = getTopProfile();
+  const card = getTopCardEl();
+  if (!p || !card) return;
+
+  p.photoIndex = (p.photoIndex + 1) % p.photos.length;
+
+  // Update only the image (no full rerender)
+  const img = card.querySelector(".card__media");
+  if (img) img.src = p.photos[p.photoIndex];
+}
+
+// -------------------
+// Buttons
+// -------------------
+likeBtn.addEventListener("click", handleLike);
+nopeBtn.addEventListener("click", handleReject);
+superLikeBtn.addEventListener("click", handleSuperLike);
 shuffleBtn.addEventListener("click", resetDeck);
 
+// -------------------
+// Gestures (mobile touch + desktop mouse drag)
+// -------------------
+const SWIPE_X = 80;
+const SWIPE_Y = 80;
+
+let startX = 0;
+let startY = 0;
+let mouseDown = false;
+
+// For double tap / double click (custom logic that always works)
+let lastTapTime = 0;
+let lastTapTargetWasCard = false;
+
+function processSwipe(dx, dy) {
+  // horizontal swipe
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (dx > SWIPE_X) { handleLike(); return true; }
+    if (dx < -SWIPE_X) { handleReject(); return true; }
+    return false;
+  }
+
+  // vertical swipe (up)
+  if (dy < -SWIPE_Y) { handleSuperLike(); return true; }
+  return false;
+}
+
+// Touch
+deckEl.addEventListener("touchstart", (e) => {
+  const t = e.touches[0];
+  startX = t.clientX;
+  startY = t.clientY;
+}, { passive: true });
+
+deckEl.addEventListener("touchend", (e) => {
+  const t = e.changedTouches[0];
+  const endX = t.clientX;
+  const endY = t.clientY;
+
+  const dx = endX - startX;
+  const dy = endY - startY;
+
+  const moved = Math.hypot(dx, dy);
+
+  // If it's basically a tap, treat it as tap/double-tap
+  if (moved <= 25) {
+    const now = Date.now();
+    const tappedOnCard = !!e.target.closest(".card");
+
+    if (tappedOnCard && lastTapTargetWasCard && (now - lastTapTime) <= 300) {
+      handleNextPhoto();
+      lastTapTime = 0;
+      lastTapTargetWasCard = false;
+    } else {
+      lastTapTime = now;
+      lastTapTargetWasCard = tappedOnCard;
+    }
+    return;
+  }
+
+  processSwipe(dx, dy);
+}, { passive: true });
+
+// Mouse drag (desktop)
+deckEl.addEventListener("mousedown", (e) => {
+  mouseDown = true;
+  startX = e.clientX;
+  startY = e.clientY;
+});
+
+window.addEventListener("mouseup", (e) => {
+  if (!mouseDown) return;
+  mouseDown = false;
+
+  const dx = e.clientX - startX;
+  const dy = e.clientY - startY;
+
+  processSwipe(dx, dy);
+});
+
+// Double click (desktop) -> next photo
+// We use a click-based timer instead of relying on dblclick (more reliable)
+deckEl.addEventListener("click", (e) => {
+  const clickedOnCard = !!e.target.closest(".card");
+  if (!clickedOnCard) return;
+
+  const now = Date.now();
+  if (lastTapTargetWasCard && (now - lastTapTime) <= 300) {
+    handleNextPhoto();
+    lastTapTime = 0;
+    lastTapTargetWasCard = false;
+  } else {
+    lastTapTime = now;
+    lastTapTargetWasCard = true;
+  }
+});
+
+// -------------------
 // Boot
+// -------------------
 resetDeck();
