@@ -45,20 +45,19 @@ const UNSPLASH_SEEDS = [
 ];
 
 function sample(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function pickTags() { return Array.from(new Set(Array.from({length:4}, () => sample(TAGS)))); }
+function pickTags() { return Array.from(new Set(Array.from({ length: 4 }, () => sample(TAGS)))); }
 function imgFor(seed) {
   return `https://images.unsplash.com/photo-${seed}?auto=format&fit=crop&w=1200&q=80`;
 }
 
-// create 4 photos per profile so "double tap" truly cycles photos
+// ✅ FIX 1: sample-without-replacement so these are actually distinct photos
 function makePhotoSet() {
-  const seeds = [
-    sample(UNSPLASH_SEEDS),
-    sample(UNSPLASH_SEEDS),
-    sample(UNSPLASH_SEEDS),
-    sample(UNSPLASH_SEEDS),
-  ];
-  // make sure they're not all identical
+  const pool = [...UNSPLASH_SEEDS];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const seeds = pool.slice(0, 4);
   return seeds.map((s, i) => `${imgFor(s)}&sig=${i}`);
 }
 
@@ -74,8 +73,8 @@ function generateProfiles(count = 12) {
       title: sample(JOBS),
       bio: sample(BIOS),
       tags: pickTags(),
-      photos,          // array of photo urls
-      photoIndex: 0,   // which photo is currently shown
+      photos,
+      photoIndex: 0,
     });
   }
   return profiles;
@@ -92,12 +91,10 @@ const superLikeBtn = document.getElementById("superLikeBtn");
 
 let profiles = [];
 
-// Return the TOP card element (the last one appended)
 function getTopCardEl() {
   return deckEl.lastElementChild;
 }
 
-// Return the TOP profile (the last profile in the array)
 function getTopProfile() {
   return profiles.length ? profiles[profiles.length - 1] : null;
 }
@@ -157,7 +154,7 @@ function resetDeck() {
 }
 
 // -------------------
-// Actions (buttons + swipes call these)
+// Actions
 // -------------------
 function removeTopProfileAndRerender() {
   if (!profiles.length) return;
@@ -166,17 +163,14 @@ function removeTopProfileAndRerender() {
 }
 
 function handleLike() {
-  // Like = remove top card
   removeTopProfileAndRerender();
 }
 
 function handleReject() {
-  // Reject = remove top card
   removeTopProfileAndRerender();
 }
 
 function handleSuperLike() {
-  // Super like = remove top card
   removeTopProfileAndRerender();
 }
 
@@ -187,7 +181,6 @@ function handleNextPhoto() {
 
   p.photoIndex = (p.photoIndex + 1) % p.photos.length;
 
-  // Update only the image (no full rerender)
   const img = card.querySelector(".card__media");
   if (img) img.src = p.photos[p.photoIndex];
 }
@@ -201,18 +194,24 @@ superLikeBtn.addEventListener("click", handleSuperLike);
 shuffleBtn.addEventListener("click", resetDeck);
 
 // -------------------
-// Gestures (mobile touch + desktop mouse drag)
+// Gestures (touch + mouse) + Double-tap/click
 // -------------------
 const SWIPE_X = 80;
 const SWIPE_Y = 80;
+const TAP_MOVE = 25;
+const DOUBLE_TAP_MS = 300;
 
 let startX = 0;
 let startY = 0;
 let mouseDown = false;
 
-// For double tap / double click (custom logic that always works)
-let lastTapTime = 0;
-let lastTapTargetWasCard = false;
+// ✅ FIX 2: isolate touch and click paths (no shared double-tap state)
+let touchLastTapTime = 0;
+let clickLastTapTime = 0;
+
+// ✅ FIX 2 & 3: suppress synthetic/stray clicks after touch or swipe
+let recentTouch = false;
+let suppressNextClick = false;
 
 function processSwipe(dx, dy) {
   // horizontal swipe
@@ -224,16 +223,21 @@ function processSwipe(dx, dy) {
 
   // vertical swipe (up)
   if (dy < -SWIPE_Y) { handleSuperLike(); return true; }
+
   return false;
 }
 
-// Touch
+// Touch start
 deckEl.addEventListener("touchstart", (e) => {
+  recentTouch = true;
+  window.setTimeout(() => { recentTouch = false; }, 400);
+
   const t = e.touches[0];
   startX = t.clientX;
   startY = t.clientY;
 }, { passive: true });
 
+// Touch end
 deckEl.addEventListener("touchend", (e) => {
   const t = e.changedTouches[0];
   const endX = t.clientX;
@@ -244,23 +248,29 @@ deckEl.addEventListener("touchend", (e) => {
 
   const moved = Math.hypot(dx, dy);
 
-  // If it's basically a tap, treat it as tap/double-tap
-  if (moved <= 25) {
+  // Tap / double-tap (touch only)
+  if (moved <= TAP_MOVE) {
     const now = Date.now();
     const tappedOnCard = !!e.target.closest(".card");
+    if (!tappedOnCard) return;
 
-    if (tappedOnCard && lastTapTargetWasCard && (now - lastTapTime) <= 300) {
+    if ((now - touchLastTapTime) <= DOUBLE_TAP_MS) {
       handleNextPhoto();
-      lastTapTime = 0;
-      lastTapTargetWasCard = false;
+      touchLastTapTime = 0;
     } else {
-      lastTapTime = now;
-      lastTapTargetWasCard = tappedOnCard;
+      touchLastTapTime = now;
     }
     return;
   }
 
-  processSwipe(dx, dy);
+  // Swipe
+  const didSwipe = processSwipe(dx, dy);
+
+  // ✅ prevent the synthetic click after touch from doing anything
+  if (didSwipe) {
+    suppressNextClick = true;
+    window.setTimeout(() => { suppressNextClick = false; }, 0);
+  }
 }, { passive: true });
 
 // Mouse drag (desktop)
@@ -277,23 +287,31 @@ window.addEventListener("mouseup", (e) => {
   const dx = e.clientX - startX;
   const dy = e.clientY - startY;
 
-  processSwipe(dx, dy);
+  const didSwipe = processSwipe(dx, dy);
+
+  // ✅ FIX 3: consume the click that happens after a drag swipe
+  if (didSwipe) {
+    suppressNextClick = true;
+    window.setTimeout(() => { suppressNextClick = false; }, 0);
+  }
 });
 
-// Double click (desktop) -> next photo
-// We use a click-based timer instead of relying on dblclick (more reliable)
+// Double click / double tap (desktop clicks only)
+// ✅ click-based double click (more consistent than dblclick)
+// ✅ ignores touch-generated clicks and suppressed clicks
 deckEl.addEventListener("click", (e) => {
+  if (recentTouch) return;
+  if (suppressNextClick) return;
+
   const clickedOnCard = !!e.target.closest(".card");
   if (!clickedOnCard) return;
 
   const now = Date.now();
-  if (lastTapTargetWasCard && (now - lastTapTime) <= 300) {
+  if ((now - clickLastTapTime) <= DOUBLE_TAP_MS) {
     handleNextPhoto();
-    lastTapTime = 0;
-    lastTapTargetWasCard = false;
+    clickLastTapTime = 0;
   } else {
-    lastTapTime = now;
-    lastTapTargetWasCard = true;
+    clickLastTapTime = now;
   }
 });
 
